@@ -1,0 +1,21 @@
+# Secrets - never commit
+key2.pem
+key_Student.txt
+*.pem
+*.key
+
+# Terraform state and variable files
+*.tfstate
+*.tfstate.*
+**/.terraform/
+.terraform.lock.hcl
+*.tfvars
+!*.tfvars.example
+
+# Environment / logs
+.env
+*.log
+
+# OS / editor
+.DS_Store
+Thumbs.db

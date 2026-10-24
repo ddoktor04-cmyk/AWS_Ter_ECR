@@ -1,0 +1,15 @@
+# Terraform
+/.terraform
+/.terraform.lock.hcl
+/terraform.tfstate
+/terraform.tfstate.backup
+*.tfstate
+*.tfstate.*
+*.tfvars
+!example.tfvars
+
+# OpenCode
+.opencode/
+# Terraform plan files
+*.tfplan
+tfplan

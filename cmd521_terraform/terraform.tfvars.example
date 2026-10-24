@@ -1,0 +1,13 @@
+aws_access_key = "YOUR_AWS_ACCESS_KEY"
+aws_secret_key = "YOUR_AWS_SECRET_KEY"
+aws_region     = "eu-north-1"
+
+# Start with the public nginx image, then switch to the ECR ToDoAI image:
+# app_image = "nginx:latest"
+app_image = "YOUR_ACCOUNT.dkr.ecr.eu-north-1.amazonaws.com/todoai:latest"
+
+ecr_repository_name = "todoai"
+
+# Optional networking overrides (default VPC + default subnets are used when omitted)
+# vpc_id            = "vpc-0123456789abcdef0"
+# public_subnet_ids = ["subnet-aaaaaaaa", "subnet-bbbbbbbb"]

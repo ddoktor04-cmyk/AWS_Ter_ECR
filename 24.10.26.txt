@@ -1,0 +1,9 @@
+Створити ECS з nginx
+Створити docket image з GitHub - macnaer/ToDoAI
+Збілдити новий docker image
+Створити ECR
+Запушити новий docker image на ECR
+Щновити ECS з nginx на новий image  
+GitHub - macnaer/ToDoAI
+Contribute to macnaer/ToDoAI development by creating an account on GitHub.
+ 
