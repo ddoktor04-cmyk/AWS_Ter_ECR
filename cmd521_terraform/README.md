@@ -1,30 +1,62 @@
-# Terraform - AWS ECS Fargate + ECR (ToDoAI)
+# Terraform — AWS ECS Fargate + ECR (ToDoAI)
 
-Deploys the [ToDoAI](https://github.com/macnaer/ToDoAI) web app (React + Vite,
-static files served by `vite preview` inside the container) to AWS:
+![Terraform](https://img.shields.io/badge/Terraform-%3E%3D1.3-purple)
+![AWS](https://img.shields.io/badge/AWS-ECS%20%7C%20ECR%20%7C%20ALB-orange)
+![Region](https://img.shields.io/badge/region-eu--north--1-blue)
 
-- **`modules/ecr`** - ECR repository `todoai` for the application image.
-- **`modules/ecs`** - ECS cluster, Fargate service (1 task, 256 CPU / 512 MiB),
+Deploys the [ToDoAI](https://github.com/macnaer/ToDoAI) web app (React 18 + Vite +
+Redux Toolkit + MUI; static bundle served by `vite preview` inside the container)
+to AWS:
+
+- **`modules/ecr`** — ECR repository `todoai` (MUTABLE tags, scan on push, force delete).
+- **`modules/ecs`** — ECS cluster, Fargate service (1 task, 256 CPU / 512 MiB),
   task definition, IAM roles, CloudWatch log group, internet-facing ALB
-  (HTTP :80, `target_type = ip`).
+  (HTTP :80, target group `target_type = ip`, health check `/` 200–399).
 
-Region: **`eu-north-1`** (Stockholm). Cost profile: 1 Fargate task + 1 ALB.
+**Live site:** http://alb-ecs-cmd521-2125570947.eu-north-1.elb.amazonaws.com
+
+Region: **`eu-north-1`** (Stockholm). Cost profile: 1 Fargate task + 1 ALB —
+EC2 / S3 / legacy ALB modules were removed deliberately to minimize cost.
+
+## Architecture
+
+```
+                         ┌───────────────────────────────┐
+ Internet ── HTTP :80 ──►│  ALB  alb-ecs-cmd521          │
+                         │  SG: 80 from 0.0.0.0/0        │
+                         └──────────────┬────────────────┘
+                                        │ forward to ip targets (port 80)
+                         ┌──────────────▼────────────────┐
+                         │  ECS Fargate task  "todoai"   │
+                         │  image: ECR todoai:latest     │
+                         │  256 CPU / 512 MiB, public IP │
+                         │  SG: 80 from ALB SG only      │
+                         └──────┬───────────────┬────────┘
+                                │               │
+                     pull image │               │ logs (awslogs)
+                         ┌──────▼─────┐  ┌──────▼──────────────┐
+                         │ ECR todoai │  │ CloudWatch /ecs/... │
+                         └────────────┘  └─────────────────────┘
+              IAM: todoai-exec (AmazonECSTaskExecutionRolePolicy)
+                   todoai-task (app role, no extra policies)
+```
 
 ## 1. Prerequisites
 
 | Tool | Version |
 |------|---------|
 | Terraform | >= 1.3 |
-| AWS access | EC2/ECR/ECS/IAM rights for the Student user |
+| AWS access | rights for ECR, ECS, IAM, ELB, EC2 (VPC read), CloudWatch Logs |
 
 ## 2. Credentials
 
 ```powershell
 Copy-Item terraform.tfvars.example terraform.tfvars
-notepad terraform.tfvars   # fill in aws_access_key / aws_secret_key
+notepad terraform.tfvars   # fill aws_access_key / aws_secret_key
 ```
 
-`terraform.tfvars` is gitignored. Never commit it.
+`terraform.tfvars` is gitignored — never commit it. `key_Student.txt` holds the
+Student user keys; `key2.pem` is the SSH key for the build server — both gitignored.
 
 ## 3. Deploy
 
@@ -34,18 +66,20 @@ terraform plan
 terraform apply
 ```
 
-Useful outputs: `ecs_alb_url`, `ecr_repository_url`.
+Useful outputs: `ecs_alb_url`, `ecr_repository_url`, `ecs_cluster_name`.
 
 ## 4. Application image workflow
 
-1. `terraform apply` with `app_image = "nginx:latest"` - smoke-test the stack.
-2. Build the app image (on a Linux host with Docker):
+1. Smoke-test the stack with `app_image = "nginx:latest"` (default).
+2. Build the app image on a Docker host (build server: `172.14.50.148`):
 
    ```bash
-   git clone https://github.com/macnaer/ToDoAI.git
-   cd ToDoAI
+   git clone https://github.com/macnaer/ToDoAI.git && cd ToDoAI
    docker build --provenance=false -t todoai:latest .
    ```
+
+   `--provenance=false` avoids OCI attestation manifests that some Fargate
+   platform versions fail to pull.
 
 3. Push to ECR:
 
@@ -54,13 +88,39 @@ Useful outputs: `ecs_alb_url`, `ecr_repository_url`.
      docker login --username AWS --password-stdin <account>.dkr.ecr.eu-north-1.amazonaws.com
    docker tag todoai:latest <account>.dkr.ecr.eu-north-1.amazonaws.com/todoai:latest
    docker push <account>.dkr.ecr.eu-north-1.amazonaws.com/todoai:latest
+   docker logout <account>.dkr.ecr.eu-north-1.amazonaws.com
    ```
 
-4. Set `app_image = "<account>.dkr.ecr.eu-north-1.amazonaws.com/todoai:latest"`
-   in `terraform.tfvars` and `terraform apply` - ECS rolls a new task
-   definition revision; the deployment circuit breaker rolls back on failure.
+4. Point the service at the image — in `terraform.tfvars`:
 
-## 5. Layout
+   ```hcl
+   app_image = "<account>.dkr.ecr.eu-north-1.amazonaws.com/todoai:latest"
+   ```
+
+   then:
+
+   ```powershell
+   terraform apply -target module.ecs
+   ```
+
+   ECS registers a new task definition revision, drains the old task and starts
+   a new one. The deployment circuit breaker (rollback enabled) reverts on failure.
+
+## 5. Verify
+
+```powershell
+# site responds with the ToDoAI app
+(Invoke-WebRequest http://alb-ecs-cmd521-2125570947.eu-north-1.elb.amazonaws.com).Content
+
+# service status
+aws ecs describe-services --cluster ecs-cmd521 --services todoai \
+  --query 'services[0].[runningCount,desiredCount,taskDefinition]'
+```
+
+A `Stopped` task with an older `todoai:N` revision after an update is normal —
+that is the drained predecessor, not an error.
+
+## 6. Layout
 
 ```
 cmd521_terraform/
@@ -71,10 +131,10 @@ cmd521_terraform/
     └── ecs/   # main.tf, iam.tf, network.tf, service.tf, variables.tf, outputs.tf
 ```
 
-## 6. Notes
+## 7. Notes
 
 - Default VPC + default subnets are used when `vpc_id` / `public_subnet_ids`
-  are omitted; the ALB and service require at least 2 default subnets (AZs).
-- The ECS task security group only accepts port 80 from the ALB security group.
-- This project intentionally contains **no EC2, no S3, no legacy ALB** - cost
-  minimization was an explicit requirement.
+  are omitted; ALB and service require at least 2 default subnets (AZs).
+- ALB DNS suffix (`-2125570947`) is generated by AWS and cannot be chosen;
+  a URL like `http://13.60.63.13` from another account cannot be reproduced.
+- This project intentionally contains **no EC2, no S3, no legacy ALB**.
